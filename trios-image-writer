@@ -70,17 +70,56 @@ SIZE=$(du -h -B1 "$ISO" | awk '{print $1}')
 # zenity --info --text="$(echo "$SIZE\n$ISO")"
 
 drive_select() {
+# Make a temporary file
+list=$(mktemp /tmp/XXXXXX)
 
-	USB=$(zenity --entry --ok-label=Continue --cancel-label=Quit \
-		--title="Select the drive to write to:" --entry-text=/dev/ \
-		--text="$(echo "Selected image is:\n$ISO\n" \
-&& echo "Find the target USB drive on the list bellow,
-then enter it's node in the \"/dev/sdX\" format.\n" \
-&& lsblk -o NAME,MODEL,VENDOR,SIZE)")
+# get a list of devices
+devs=`ls -al /dev/disk/by-path/*usb*part* 2>/dev/null | awk '{print($11)}'`
+if [[ ${?} != 0 || -z ${devs} ]]
+then
+    zenity --warning --text "No USB Pluged!"
+    exit
+fi
 
-	if [ -z "$USB" ] ; then
-		exit
-	fi
+# Initialize list and make sure it is empty
+>$list
+
+# Now get the info about our devices and put it in a list
+for dev in $devs; do dev="${dev##*\/}";
+    echo "FALSE" >> $list;
+    echo "/dev/${dev}" >> $list;
+    echo `cat /sys/block/${dev:0:3}/device/vendor 2>/dev/null` >> $list;
+    echo `cat /sys/block/${dev:0:3}/device/model 2>/dev/null` >> $list;
+    echo `lsblk 2>/dev/null | grep \`echo -E ${dev}\` |awk '{print($4)}' `B >> $list;
+    echo `lsblk 2>/dev/null | grep \`echo -E ${dev}\` |cut -c 37- ` >> $list;
+    echo -n `lsblk -o NAME 2>/dev/null | grep \`echo -E ${dev}\`| awk '{print($2)}'  ` >> $list;
+    df -T `echo -E /dev/${dev}` 2>/dev/null | tail -1 | awk '{print $2}' >> $list;
+    echo `ls -l /dev/disk/by-uuid/ 2>/dev/null | grep \`echo -E ${dev}\`| awk '{print($9)}' ` >> $list;
+        done
+        
+#Display the selection dialog
+USB=$(cat ${list} | zenity --list --text="$(echo "Selected image is:\n$ISO\n" \
+&& echo "<b>Pick</b> the target USB drive on the list bellow and click OK to proceed".)" \
+ --radiolist  --width=650 --height=350 --column="Pick" --column="Dev" --column="Vendor" --column="Model" \
+ --column="Size" --column="Mount" --column="FS" --column="UUID" --ok-label=Continue --cancel-label=Quit)
+ 
+#Test for cancellation
+if [[ ${?} != 0  ]]
+then
+rm $list
+    exit 0
+fi
+
+rm $list
+
+#Check if anything was selected
+echo ${USB} | grep ^/dev/. &>/dev/null
+if [[ ${?} != 0  ]]
+then
+    zenity --info --text="Nothing was selected..."
+    exit 0
+fi
+
 }
 
 if [ -z "$USB" ]; then
